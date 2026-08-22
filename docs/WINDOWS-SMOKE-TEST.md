@@ -1,0 +1,3 @@
+# Windows release smoke test
+
+Run on a clean Windows 10/11 x64 VM without Node or MongoDB: install the NSIS artifact; launch from Desktop and Start Menu; confirm there is no console or login; create a product and opening stock; post sale, purchase, expense, settlement, and warehouse/account transfers; inspect every report; scan a barcode as keyboard input; print an invoice; export and restore a backup; close, disable networking, reopen, and verify persistence; import a real DataAcc SQLite file; upgrade/reinstall and verify data; uninstall normally and verify `%LOCALAPPDATA%\Conta Offline` remains.

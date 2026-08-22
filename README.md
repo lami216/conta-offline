@@ -1,92 +1,43 @@
-# Conta POS — النشر الإنتاجي
+# Conta Offline
 
-يعمل Conta كتطبيق **Next.js على Node.js**، ويستخدم **MongoDB Atlas فقط**. يدير PM2 العملية، ويمرر Nginx الدومين إلى `127.0.0.1:3000`. لا يحتاج التشغيل أو التحديث إلى Docker أو Cloudflare أو Wrangler أو migrations يدوية.
+نسخة سطح مكتب محلية من نظام Conta للمحاسبة ونقاط البيع، لويندوز 10/11 ‏x64. يعمل التطبيق من مُثبّت واحد، بلا إنترنت وبلا MongoDB أو Node.js أو PM2 أو Nginx أو Docker أو إعداد `.env`.
 
-## متطلبات الخادم
+## الاستخدام
 
-- Ubuntu، وNode.js 22.13 أو أحدث، وGit.
-- MongoDB Atlas مع السماح لعنوان IP الخاص بالخادم ومستخدم محدود الصلاحيات. يجب أن يكون Replica Set أو Sharded Cluster يدعم Transactions؛ يعتمد النظام على `withTransaction` ولا يسقط إلى writes غير ذرية، ولا يصلح standalone MongoDB.
-- PM2 (`sudo npm install -g pm2`) وNginx.
-- سجل DNS من نوع A يشير إلى الخادم، مع فتح 80 و443 فقط. لا تفتح 3000 في firewall؛ التطبيق يستمع إلى loopback فقط.
-
-## أول نشر
-
-```bash
-sudo mkdir -p /var/www
-sudo chown "$USER":"$USER" /var/www
-git clone <GIT_REPOSITORY_URL> /var/www/conta
-cd /var/www/conta
-cp .env.production.example .env.production.local
-nano .env.production.local
-# ولّد OWNER_PASSWORD_HASH بواسطة npm run hash-password وSESSION_SECRET عشوائيًا بطول 32 حرفًا على الأقل.
-npm ci
-npm run build
-pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup
-```
-
-نفّذ الأمر الذي يطبعه `pm2 startup` بصلاحية sudo، ثم نفّذ `pm2 save` مرة أخرى. تحقّق بـ `pm2 status`؛ يجب أن يظهر **Conta online**. عند كل تشغيل يفحص Conta اتصال MongoDB، وينشئ الـindexes والمخزنين الافتراضيين بصورة idempotent قبل خدمة الطلبات. لا تطبق `schema.sql` ولا تضغط migration ولا تستخدم Explorer أو Wrangler.
-
-### Nginx وHTTPS
-
-أنشئ `/etc/nginx/sites-available/conta` (استبدل `conta.example.com`):
-
-```nginx
-server {
-    listen 80;
-    listen [::]:80;
-    server_name conta.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-```bash
-sudo ln -s /etc/nginx/sites-available/conta /etc/nginx/sites-enabled/conta
-sudo nginx -t
-sudo systemctl reload nginx
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d conta.example.com
-curl --fail https://conta.example.com/api/health
-```
-
-النتيجة الصحيحة هي `{"status":"ok","database":"connected"}`. راجع أيضًا أن HTTPS يعمل، وأن `curl http://PUBLIC_IP:3000` يفشل من جهاز خارجي. تبقى health عامة للمراقبة ولا تعرض أسرارًا، بينما الصفحة وواجهتا bootstrap وcommand محمية بجلسة موقعة HttpOnly وSameSite=Strict وSecure في production.
-
-## التحديثات اليومية
-
-بعد تعديل الكود و`commit` و`push`، ادخل إلى الخادم وشغّل فقط:
-
-```bash
-cd /var/www/conta
-./scripts/deploy.sh
-```
-
-يسحب السكربت الفرع الحالي بـfast-forward، يثبت lockfile، ويبني في مجلد مرشح، ولا يعيد تحميل PM2 إلا بعد نجاح البناء. عند فشل reload يعيد build السابق. ثم يفحص `/api/health` ويحفظ حالة PM2. لذلك فشل build لا يسقط النسخة الحالية.
-
-## التشغيل والسجلات والتشخيص
-
-```bash
-pm2 status
-pm2 logs Conta
-curl --fail http://127.0.0.1:3000/api/health
-sudo nginx -t
-sudo systemctl status nginx
-```
-
-السجلات JSON واضحة لأحداث startup وMongoDB وinitialization وأوامر API. لا يسجل التطبيق أجسام أوامر API، ويُنقّح الحقول الحساسة مثل passwords وtokens وconnection strings. احتفظ بـ`.env.production.local` بصلاحيات مقيدة ولا تلصق محتواه في السجلات أو تذاكر الدعم.
-
-## مسار العمل
+ثبّت `release/Conta-Offline-Setup-x64.exe` ثم افتح **Conta Offline** من سطح المكتب أو قائمة Start. لا توجد شاشة كلمة مرور. تحفظ البيانات في:
 
 ```text
-تعديل الكود → commit → push → الدخول للسيرفر → ./scripts/deploy.sh
+%LOCALAPPDATA%\Conta Offline\
+  data\conta.db
+  backups\
+  imports\
+  logs\conta.log
+  temp\
 ```
 
-يظل Nginx على الدومين نفسه، وPM2 يعيد تحميل التطبيق نفسه؛ لا توجد طبقة نشر أخرى.
+لا يحذف إلغاء التثبيت العادي قاعدة البيانات أو النسخ الاحتياطية. ينشئ التشغيل الأول المخزن الرئيسي ووسائل الدفع تلقائيًا. يستمع الخادم الداخلي إلى `127.0.0.1` فقط.
+
+## التطوير والإصدار
+
+يتطلب التطوير Node.js 22.13+ فقط (ليس مطلوبًا عند العميل):
+
+```bash
+npm ci
+npm run dev
+npm test
+npm run lint
+npm run build
+npm run desktop:dev
+npm run desktop:build
+npm run dist:win
+```
+
+ينشئ `npm run dist:win` الملف `release/Conta-Offline-Setup-x64.exe`. التطبيق المعبأ يتضمن Next standalone وElectron وSQLite وملف `sql.js` WASM.
+
+## النسخ والترحيل
+
+يصدر Offline نسخة منطقية `conta-backup` v2. كما يقبل الاستعادة من نسخة Conta Online القديمة v1/Mongo Extended JSON. لنقل البيانات: أنشئ النسخة الاعتيادية في Conta Online، انقل الملف إلى جهاز ويندوز، ثم اختر الاستعادة داخل Conta Offline. لا يتصل Offline بـAtlas.
+
+استيراد DataAcc SQLite يعمل محليًا: اختر الملف، عاينه، ثم نفّذ الاستيراد. ينشئ النظام نسخة أمان قبل الاستعادة أو الاستيراد.
+
+راجع [معمارية Offline](docs/OFFLINE-ARCHITECTURE.md) و[اختبار ويندوز اليدوي](docs/WINDOWS-SMOKE-TEST.md).

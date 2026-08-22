@@ -1,0 +1,1 @@
+const {spawn}=require('node:child_process');const electron=require('electron');const child=spawn(electron,['desktop/main.cjs'],{stdio:'inherit',env:{...process.env,CONTA_MODE:'development'}});child.on('exit',c=>process.exit(c??0));

@@ -1,4 +1,1 @@
-import { requireCapability } from "../../../../lib/auth.ts";
-import { getMongo } from "../../../../lib/mongodb.ts";
-import { listImportRuns } from "../../../../legacy/import-run.ts";
-export async function GET(request:Request){const denied=requireCapability(request,"settings.legacy.import");if(denied)return denied;return Response.json({runs:await listImportRuns(await getMongo())},{headers:{"cache-control":"no-store"}})}
+import { getStorage } from '../../../../lib/storage/index.ts';export async function GET(){return Response.json({runs:getStorage().prepare('SELECT payload FROM import_runs ORDER BY created_at DESC LIMIT 20').all().map((x:any)=>JSON.parse(x.payload))})}
