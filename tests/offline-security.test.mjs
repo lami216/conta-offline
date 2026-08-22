@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync,existsSync} from 'node:fs';
+test('home has no login and local owner seam remains',()=>{assert.doesNotMatch(readFileSync('app/page.tsx','utf8'),/redirect|password|login/);assert.equal(existsSync('app/login'),false);assert.match(readFileSync('lib/auth.ts','utf8'),/local-owner/)});
+test('desktop is loopback-only and renderer hardened',()=>{const s=readFileSync('desktop/main.cjs','utf8');assert.match(s,/127\.0\.0\.1/);assert.match(s,/nodeIntegration:false/);assert.match(s,/contextIsolation:true/);assert.match(s,/sandbox:true/);assert.doesNotMatch(s,/0\.0\.0\.0/)});
+test('installer preserves app data and has fixed artifact name',()=>{const p=JSON.parse(readFileSync('package.json','utf8'));assert.equal(p.build.win.artifactName,'Conta-Offline-Setup-x64.${ext}');assert.equal(p.build.nsis.deleteAppDataOnUninstall,false)});

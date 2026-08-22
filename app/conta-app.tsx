@@ -245,7 +245,7 @@ export default function ContaApp() {
         </nav>
         <div className="side-foot">
           <span className="owner-mark">م</span><strong>المالك</strong>
-          <form action="/api/auth/logout" method="post"><button type="submit">تسجيل الخروج</button></form>
+          <span className="desktop-mode">وضع المالك المحلي</span>
         </div>
       </aside>
       <main>

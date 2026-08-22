@@ -1,0 +1,6 @@
+node_modules/
+.next/
+release/win-unpacked/
+release/builder-*.yml
+release/*.exe
+*.tsbuildinfo

@@ -1,46 +1,17 @@
-import { BSON, type ClientSession, type Db, type Document } from "mongodb";
-import { ensureDatabaseSchema } from "./mongodb.ts";
+import { EJSON } from "bson";
+import { copyFileSync,mkdirSync,writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getStorage } from "./storage/index.ts";
+import { resolveContaPaths } from "./paths.ts";
+export const BACKUP_COLLECTIONS=["products","warehouses","parties","documents","stockMovements","recurringExpenses","financialMovements","paymentAccounts","accountTransfers"] as const;
+type Backup={format:"conta-backup";schemaVersion:1|2;createdAt:string;appVersion:string;encoding:string;collections:Record<string,Record<string,unknown>[]>;counts:Record<string,number>};
+const tables:Record<string,string>={products:"products",warehouses:"warehouses",parties:"parties",documents:"documents",stockMovements:"stock_movements",recurringExpenses:"recurring_expenses",financialMovements:"financial_movements",paymentAccounts:"payment_accounts",accountTransfers:"account_transfers"};
+export function createNativeBackup(_legacy?:unknown):Backup{const db=getStorage(),collections=Object.fromEntries(BACKUP_COLLECTIONS.map(k=>[k,db.prepare(`SELECT * FROM ${tables[k]}`).all() as Record<string,unknown>[]])) as Record<string,Record<string,unknown>[]>;return{format:"conta-backup",schemaVersion:2,createdAt:new Date().toISOString(),appVersion:"1.0.0",encoding:"conta-logical-json-v2",collections,counts:Object.fromEntries(BACKUP_COLLECTIONS.map(k=>[k,collections[k].length]))}}
+export function stringifyBackup(b:Backup){return JSON.stringify(b)}
+export function parseAndValidateBackup(raw:string){const b=(raw.includes('mongodb-extended-json')?EJSON.parse(raw):JSON.parse(raw)) as Backup;if(b?.format!=="conta-backup"||![1,2].includes(b.schemaVersion)||!b.collections)throw new Error("صيغة النسخة الاحتياطية غير صالحة");return b}
+export function createSafetyBackup(reason:string){const paths=resolveContaPaths();mkdirSync(paths.backups,{recursive:true});const stamp=new Date().toISOString().replace(/[:.]/g,"-");const path=join(paths.backups,`safety-${reason}-${stamp}.db`);const db=getStorage();db.pragma("wal_checkpoint(FULL)");copyFileSync(paths.database,path);db.prepare("INSERT INTO safety_backups(id,reason,path,created_at) VALUES(?,?,?,?)").run(crypto.randomUUID(),reason,path,new Date().toISOString());return path}
+export function writeDailyBackup(){const p=resolveContaPaths();mkdirSync(p.backups,{recursive:true});const path=join(p.backups,`conta-${new Date().toISOString().slice(0,10)}.json`);if(!requireExists(path))writeFileSync(path,stringifyBackup(createNativeBackup()),{flag:"wx"});return path}function requireExists(path:string){try{return !!(globalThis as unknown as {process:unknown}).process&&!!requireStat(path)}catch{return false}}function requireStat(path:string){try{const fs=process.getBuiltinModule?.("fs") as typeof import("node:fs")|undefined;return fs?.existsSync(path)}catch{return false}}
+export function restoreNativeBackup(b:Backup){createSafetyBackup("before-restore");const db=getStorage();db.transaction(()=>{for(const k of [...BACKUP_COLLECTIONS].reverse())db.prepare(`DELETE FROM ${tables[k]}`).run();if(b.schemaVersion===2){for(const k of BACKUP_COLLECTIONS){const rows=b.collections[k]??[];for(const row of rows){const keys=Object.keys(row).filter(x=>x!=="_id"),sql=`INSERT INTO ${tables[k]}(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})`;db.prepare(sql).run(...keys.map(x=>typeof row[x]==="object"?JSON.stringify(row[x]):row[x]))}}}else restoreV1(db,b);})();}
+function restoreV1(db:ReturnType<typeof getStorage>,b:Backup){for(const w of b.collections.warehouses??[])db.prepare("INSERT INTO warehouses(id,name,is_sales_default,legacy_key,created_at,payload) VALUES(?,?,?,?,?,?)").run(String(w._id??w.id),w.name,Boolean(w.isSalesDefault)?1:0,w.legacyKey??null,String(w.createdAt??new Date().toISOString()),JSON.stringify(w));for(const p of b.collections.products??[]){db.prepare("INSERT INTO products(id,sku,barcode,name,piece_cost,piece_price,last_purchase_cost,last_purchase_at,is_archived,legacy_key,created_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(p.id,p.sku,p.barcode||null,p.name,p.pieceCost??null,p.piecePrice??null,p.lastPurchaseCost??null,p.lastPurchaseAt??null,p.isArchived?1:0,p.legacyKey??null,String(p.createdAt??new Date().toISOString()),JSON.stringify(p));for(const [wid,q] of Object.entries(p.stocks??{}))db.prepare("INSERT INTO product_stocks(product_id,warehouse_id,quantity) VALUES(?,?,?)").run(p.id,wid,q)}for(const a of b.collections.paymentAccounts??[])db.prepare("INSERT INTO payment_accounts(id,code,name,color,icon,is_active,balance,legacy_key,created_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?)").run(a.id,a.code,a.name,a.color??"#64748b",a.icon??"wallet",a.isActive===false?0:1,a.balance??0,a.legacyKey??null,String(a.createdAt??new Date().toISOString()),JSON.stringify(a));for(const p of b.collections.parties??[])db.prepare("INSERT INTO parties(id,name,phone,roles,receivable,payable,net,legacy_key,created_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?)").run(p.id,p.name,p.phone??"",JSON.stringify(p.roles??[]),p.receivable??0,p.payable??0,p.net??0,p.legacyKey??null,String(p.createdAt??new Date().toISOString()),JSON.stringify(p));}
 
-export const BACKUP_SCHEMA_VERSION = 1;
-export const BACKUP_COLLECTIONS = ["parties", "warehouses", "products", "documents", "stockMovements", "financialMovements", "paymentAccounts", "recurringExpenses", "accountTransfers", "counters", "auditEvents", "appSettings"] as const;
-export const MAX_BACKUP_ITEMS = 500_000;
-export const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
-type BackupCollection = typeof BACKUP_COLLECTIONS[number];
-export type ContaBackup = { format: "conta-backup"; schemaVersion: 1; createdAt: string; appVersion: string; encoding: "mongodb-extended-json-v2"; collections: Record<BackupCollection, Document[]>; counts: Record<BackupCollection, number> };
-
-export async function createNativeBackup(db: Db): Promise<ContaBackup> {
-  const pairs = await Promise.all(BACKUP_COLLECTIONS.map(async name => [name, await db.collection(name).find().toArray()] as const));
-  const collections = Object.fromEntries(pairs) as unknown as ContaBackup["collections"];
-  return { format: "conta-backup", schemaVersion: 1, createdAt: new Date().toISOString(), appVersion: process.env.npm_package_version ?? "0.1.0", encoding: "mongodb-extended-json-v2", collections, counts: Object.fromEntries(pairs.map(([name, rows]) => [name, rows.length])) as ContaBackup["counts"] };
-}
-export function stringifyBackup(value: ContaBackup) { return BSON.EJSON.stringify(value, { relaxed: false }); }
-export function parseAndValidateBackup(input: string): ContaBackup {
-  if (Buffer.byteLength(input) > MAX_BACKUP_BYTES) throw new Error("ملف النسخة أكبر من الحد المسموح");
-  let value: unknown; try { value = BSON.EJSON.parse(input); } catch { throw new Error("ملف النسخة ليس JSON صالحًا"); }
-  const b = value as Partial<ContaBackup>;
-  if (b.format !== "conta-backup") throw new Error("هذا الملف ليس نسخة Conta");
-  if (b.schemaVersion !== BACKUP_SCHEMA_VERSION) throw new Error(Number(b.schemaVersion) > BACKUP_SCHEMA_VERSION ? "إصدار النسخة أحدث من هذا التطبيق" : "إصدار النسخة غير مدعوم");
-  if (!b.collections || typeof b.collections !== "object" || Array.isArray(b.collections)) throw new Error("بنية collections غير صالحة");
-  const keys = Object.keys(b.collections);
-  if (keys.some(k => !BACKUP_COLLECTIONS.includes(k as BackupCollection))) throw new Error("تحتوي النسخة على collection غير مسموح");
-  for (const name of BACKUP_COLLECTIONS) if (!Array.isArray(b.collections[name])) throw new Error(`collection مفقود: ${name}`);
-  const total = BACKUP_COLLECTIONS.reduce((n, k) => n + b.collections![k].length, 0); if (total > MAX_BACKUP_ITEMS) throw new Error("عدد السجلات أكبر من الحد المسموح");
-  validateInvariants(b as ContaBackup); return b as ContaBackup;
-}
-const nonempty = (v: unknown) => typeof v === "string" && v.length > 0;
-function unique(rows: Document[], field: string, label: string, optional = false) { const seen = new Set<string>(); for (const row of rows) { const v = row[field]; if (optional && !nonempty(v)) continue; if (!nonempty(v) || seen.has(v)) throw new Error(`${label} مكرر أو غير صالح`); seen.add(v); } return seen; }
-export function validateInvariants(b: ContaBackup) {
-  const products = unique(b.collections.products, "id", "معرف المنتج"), warehouses = new Set(b.collections.warehouses.map(w => String(w._id ?? w.id))), accounts = unique(b.collections.paymentAccounts, "id", "معرف الحساب");
-  if (b.collections.warehouses.filter(w => w.isSalesDefault === true).length !== 1) throw new Error("يجب أن تحتوي النسخة على مخزن بيع افتراضي واحد");
-  unique(b.collections.products, "sku", "رمز المنتج"); unique(b.collections.products, "barcode", "باركود المنتج", true); unique(b.collections.documents, "id", "معرف الفاتورة"); unique(b.collections.documents, "number", "رقم الفاتورة");
-  for (const p of b.collections.products) for (const key of Object.keys((p.stocks ?? {}) as object)) if (!warehouses.has(key)) throw new Error("مخزون يشير إلى مخزن غير موجود");
-  const saleSequences = new Set<string>();
-  for (const d of b.collections.documents) { if (d.warehouseId && !warehouses.has(String(d.warehouseId))) throw new Error("فاتورة تشير إلى مخزن غير موجود"); if (d.paymentMethod && d.paymentMethod !== "note" && !accounts.has(String(d.paymentMethod)) && !b.collections.paymentAccounts.some(a => a.code === d.paymentMethod)) throw new Error("فاتورة تشير إلى حساب غير موجود"); if (d.kind === "sale" && d.businessDate && d.dailySequence != null) { const sequence = `${d.businessDate}:${d.dailySequence}`; if (saleSequences.has(sequence)) throw new Error("تسلسل البيع اليومي مكرر"); saleSequences.add(sequence); } for (const l of Array.isArray(d.lines) ? d.lines : []) if (l.productId && !products.has(String(l.productId))) throw new Error("فاتورة تشير إلى منتج غير موجود"); }
-}
-export async function restoreNativeBackup(db: Db, backup: ContaBackup, session: ClientSession) {
-  validateInvariants(backup);
-  for (const name of BACKUP_COLLECTIONS) { const collection = db.collection(name); await collection.deleteMany({}, { session }); if (backup.collections[name].length) await collection.insertMany(backup.collections[name], { session, ordered: true }); }
-  await rebuildCounters(db, session);
-}
-export async function rebuildCounters(db: Db, session?: ClientSession) { const products = await db.collection("products").find({}, { session, projection: { sku: 1 } }).toArray(); const max = products.reduce((n,p) => /^\d{1,9}$/.test(String(p.sku)) ? Math.max(n, Number(p.sku)) : n, 0); await db.collection<{_id:string;value:number;updatedAt?:Date}>("counters").updateOne({ _id: "productSequence" }, { $max: { value: max }, $set: { updatedAt: new Date() } }, { upsert: true, session }); }
-export async function finishRestore(db: Db) { await ensureDatabaseSchema(db); }
+export async function rebuildCounters(_legacy?:unknown){const db=getStorage(),max=Number((db.prepare("SELECT max(CAST(sku AS INTEGER)) value FROM products").get() as {value:number|null}).value??0);db.prepare("UPDATE counters SET value=max(value,?),updated_at=? WHERE key='productSequence'").run(max,new Date().toISOString())}
